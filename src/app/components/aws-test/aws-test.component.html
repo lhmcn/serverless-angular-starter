@@ -1,6 +1,6 @@
 <div>
-	@if (currentUser && currentUser.loggedIn) {
-		Hello, {{ currentUser.name }}
+	@if (currentUser()?.loggedIn) {
+		Hello, {{ currentUser()?.name }}
 		<button mat-button (click)="onLogout()" color="primary">Log out</button>
 	} @else {
 		<mat-form-field>
@@ -15,7 +15,7 @@
 				[formControl]="passwordFormControl"
 			/>
 		</mat-form-field>
-		@if (newPasswordRequired) {
+		@if (newPasswordRequired()) {
 			<mat-form-field>
 				<mat-label>New Password</mat-label>
 				<input
@@ -48,7 +48,7 @@
 		<mat-icon>add</mat-icon>
 	</button>
 </div>
-@for (control of apiPayloadControls; track control.id) {
+@for (control of apiPayloadControls(); track control.id) {
 	<div>
 		<mat-form-field>
 			<mat-label>Key</mat-label>

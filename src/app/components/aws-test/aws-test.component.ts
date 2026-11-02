@@ -1,7 +1,12 @@
-import { Component, OnInit } from "@angular/core";
-import { FormControl } from "@angular/forms";
+import { Component, OnInit, signal } from "@angular/core";
+import { FormControl, ReactiveFormsModule } from "@angular/forms";
+import { MatButtonModule } from "@angular/material/button";
+import { MatFormFieldModule } from "@angular/material/form-field";
+import { MatIconModule } from "@angular/material/icon";
+import { MatInputModule } from "@angular/material/input";
+import { MatSelectModule } from "@angular/material/select";
+import { v7 as uuid } from "uuid";
 import * as AWS from "../../libs/AWS";
-import { v4 as uuid } from "uuid";
 import { CurrentUser } from "../../libs/AWS/models/CurrentUser";
 import { UserService } from "../../services/user.service";
 
@@ -15,6 +20,14 @@ interface PayloadControlListItem {
 	selector: "app-aws-test",
 	templateUrl: "./aws-test.component.html",
 	styleUrl: "./aws-test.component.scss",
+	imports: [
+		ReactiveFormsModule,
+		MatFormFieldModule,
+		MatInputModule,
+		MatSelectModule,
+		MatButtonModule,
+		MatIconModule,
+	],
 })
 export class AwsTestComponent implements OnInit {
 	protected apiMethods = [
@@ -29,20 +42,18 @@ export class AwsTestComponent implements OnInit {
 	protected usernameFormControl = new FormControl<string>("");
 	protected passwordFormControl = new FormControl<string>("");
 	protected newPasswordFormControl = new FormControl<string>("");
-	protected apiMethodFormControl = new FormControl<string>(
-		this.apiMethods[0][1],
-	);
+	protected apiMethodFormControl = new FormControl<string>(this.apiMethods[0][1]);
 	protected apiEndpointFormControl = new FormControl<string>("");
-	protected apiPayloadControls: PayloadControlListItem[] = [];
 
-	protected currentUser: CurrentUser | null = null;
-	protected newPasswordRequired = false;
+	protected apiPayloadControls = signal<PayloadControlListItem[]>([]);
+	protected currentUser = signal<CurrentUser | null>(null);
+	protected newPasswordRequired = signal<boolean>(false);
 
 	constructor(private userService: UserService) {}
 
 	ngOnInit(): void {
 		this.userService.currentUser$.subscribe((user) => {
-			this.currentUser = user;
+			this.currentUser.set(user);
 		});
 	}
 
@@ -51,36 +62,33 @@ export class AwsTestComponent implements OnInit {
 		const password = this.passwordFormControl.value;
 		const newPassword = this.newPasswordFormControl.value;
 
-		if (
-			username &&
-			password &&
-			(!this.newPasswordRequired || newPassword)
-		) {
-			this.userService
-				.login(username, password, newPassword)
-				.subscribe((result) => {
-					this.newPasswordRequired = result.newPasswordRequired;
-				});
+		if (username && password && (!this.newPasswordRequired() || newPassword)) {
+			this.userService.login(username, password, newPassword).subscribe((result) => {
+				this.newPasswordRequired.set(result.newPasswordRequired);
+			});
 		}
 	};
 
 	protected onLogout = () => {
 		this.userService.logout().subscribe(() => {
-			this.currentUser = null;
+			this.currentUser.set(null);
 		});
 	};
 
 	protected onAddPayloadField = () => {
-		this.apiPayloadControls.push({
-			id: uuid(),
-			keyControl: new FormControl<string>(""),
-			valueControl: new FormControl<string>(""),
-		});
+		this.apiPayloadControls.update((controls) => [
+			...controls,
+			{
+				id: uuid(),
+				keyControl: new FormControl<string>(""),
+				valueControl: new FormControl<string>(""),
+			},
+		]);
 	};
 
 	protected onRemovePayloadField = (id: string) => {
-		this.apiPayloadControls = this.apiPayloadControls.filter(
-			(control) => control.id !== id,
+		this.apiPayloadControls.set(
+			this.apiPayloadControls().filter((control) => control.id !== id),
 		);
 	};
 
@@ -98,7 +106,7 @@ export class AwsTestComponent implements OnInit {
 	private getPayload = () => {
 		const payload: any = {};
 
-		this.apiPayloadControls.forEach((item) => {
+		this.apiPayloadControls().forEach((item) => {
 			if (item.keyControl.value) {
 				payload[item.keyControl.value] = item.valueControl.value;
 			}

@@ -1,15 +1,86 @@
-import { Result } from "./models/Result";
 import * as API from "@aws-amplify/api";
+import { DocumentType } from "@aws-amplify/core/internals/utils";
 import { Observable, Subject } from "rxjs";
-import { RestApiOptionsBase } from "@aws-amplify/api-rest/src/types";
-import { DocumentType } from "@aws-amplify/core/src/singleton/API/types";
 import { ApiResponse } from "./models/ApiResponse";
+import { Result } from "./models/Result";
 
 export const API_NAME = "api";
 
 interface AWSApiResult<T> extends Result {
 	data?: T;
 }
+
+interface ApiResponsePayload {
+	statusCode: number;
+	body?: { json(): Promise<DocumentType> };
+}
+
+type ApiCall = () => { response: Promise<ApiResponsePayload> };
+
+type ResponseMapper<T> = (
+	response: ApiResponsePayload,
+) => AWSApiResult<T> | null | Promise<AWSApiResult<T> | null>;
+
+/**
+ * Invokes an API through AWS API Gateway and maps its response to a result
+ * @param call Performs the actual API call
+ * @param mapResponse Maps the raw response to a result, or null to skip emitting
+ * @return Returns the result of the API call
+ */
+const awsRequest = <T>(
+	call: ApiCall,
+	mapResponse: ResponseMapper<T>,
+): Observable<AWSApiResult<T>> => {
+	const resultSubject = new Subject<AWSApiResult<T>>();
+
+	call()
+		.response.then(mapResponse)
+		.then((result) => {
+			if (result) {
+				resultSubject.next(result);
+			}
+		})
+		.catch((err) => {
+			resultSubject.next({
+				success: false,
+				code: err.code,
+				message: err.message,
+			});
+		});
+
+	return resultSubject.asObservable();
+};
+
+/**
+ * Maps a JSON response body to a result
+ * @param response The raw response
+ * @return Returns null when the response has no JSON body
+ */
+const mapJsonBody = async <T>(response: ApiResponsePayload): Promise<AWSApiResult<T> | null> => {
+	const json = await response.body?.json();
+
+	if (!json) {
+		return null;
+	}
+
+	const body = json as unknown as ApiResponse<T>;
+
+	return {
+		success: true,
+		code: body.code,
+		message: body.message,
+		data: body.data,
+	};
+};
+
+/**
+ * Maps the status code of a response without a JSON body to a result
+ * @param response The raw response
+ */
+const mapStatusCode = <T>(response: ApiResponsePayload): AWSApiResult<T> => ({
+	success: response.statusCode === 200,
+	code: response.statusCode.toString(),
+});
 
 /**
  * Invokes a GET API through AWS API Gateway
@@ -20,13 +91,16 @@ interface AWSApiResult<T> extends Result {
 export const awsGet = <T = any>(
 	path: string,
 	queryParams: Record<string, string> = {},
-): Observable<AWSApiResult<T>> => {
-	const options: RestApiOptionsBase = {
-		queryParams,
-	};
-
-	return awsAPI("get", path, options);
-};
+): Observable<AWSApiResult<T>> =>
+	awsRequest<T>(
+		() =>
+			API.get({
+				apiName: API_NAME,
+				path,
+				options: { queryParams },
+			}),
+		mapJsonBody,
+	);
 
 /**
  * Invokes a DEL API through AWS API Gateway
@@ -37,13 +111,16 @@ export const awsGet = <T = any>(
 export const awsDel = <T = any>(
 	path: string,
 	queryParams: Record<string, string> = {},
-): Observable<AWSApiResult<T>> => {
-	const options: RestApiOptionsBase = {
-		queryParams,
-	};
-
-	return awsAPIWithoutBody("del", path, options);
-};
+): Observable<AWSApiResult<T>> =>
+	awsRequest<T>(
+		() =>
+			API.del({
+				apiName: API_NAME,
+				path,
+				options: { queryParams },
+			}),
+		mapStatusCode,
+	);
 
 /**
  * Invokes a HEAD API through AWS API Gateway
@@ -54,13 +131,16 @@ export const awsDel = <T = any>(
 export const awsHead = <T = any>(
 	path: string,
 	queryParams: Record<string, string> = {},
-): Observable<AWSApiResult<T>> => {
-	const options: RestApiOptionsBase = {
-		queryParams,
-	};
-
-	return awsAPIWithoutBody("head", path, options);
-};
+): Observable<AWSApiResult<T>> =>
+	awsRequest<T>(
+		() =>
+			API.head({
+				apiName: API_NAME,
+				path,
+				options: { queryParams },
+			}),
+		mapStatusCode,
+	);
 
 /**
  * Invokes a POST API through AWS API Gateway
@@ -73,14 +153,16 @@ export const awsPost = <T = any>(
 	path: string,
 	body: DocumentType = {},
 	queryParams: Record<string, string> = {},
-): Observable<AWSApiResult<T>> => {
-	const options: RestApiOptionsBase = {
-		body,
-		queryParams,
-	};
-
-	return awsAPI("post", path, options);
-};
+): Observable<AWSApiResult<T>> =>
+	awsRequest<T>(
+		() =>
+			API.post({
+				apiName: API_NAME,
+				path,
+				options: { body, queryParams },
+			}),
+		mapJsonBody,
+	);
 
 /**
  * Invokes a PUT API through AWS API Gateway
@@ -93,14 +175,16 @@ export const awsPut = <T = any>(
 	path: string,
 	body: DocumentType = {},
 	queryParams: Record<string, string> = {},
-): Observable<AWSApiResult<T>> => {
-	const options: RestApiOptionsBase = {
-		body,
-		queryParams,
-	};
-
-	return awsAPI("put", path, options);
-};
+): Observable<AWSApiResult<T>> =>
+	awsRequest<T>(
+		() =>
+			API.put({
+				apiName: API_NAME,
+				path,
+				options: { body, queryParams },
+			}),
+		mapJsonBody,
+	);
 
 /**
  * Invokes a PATCH API through AWS API Gateway
@@ -113,81 +197,13 @@ export const awsPatch = <T = any>(
 	path: string,
 	body: DocumentType = {},
 	queryParams: Record<string, string> = {},
-): Observable<AWSApiResult<T>> => {
-	const options: RestApiOptionsBase = {
-		body,
-		queryParams,
-	};
-
-	return awsAPI("patch", path, options);
-};
-
-const awsAPI = <T = any>(
-	method: "get" | "post" | "put" | "patch",
-	path: string,
-	options: RestApiOptionsBase,
-): Observable<AWSApiResult<T>> => {
-	const result: AWSApiResult<T> = {
-		success: false,
-	};
-
-	const resultSubject = new Subject<AWSApiResult<T>>();
-
-	if (path[0] !== "/") path = "/" + path;
-
-	API[method]({ apiName: API_NAME, path, options })
-		.response.then((response) => response.body.json())
-		.then((json) => {
-			if (json) {
-				const response = json as unknown as ApiResponse<T>;
-				result.success = true;
-				result.code = response.code;
-				result.message = response.message;
-				result.data = response.data;
-
-				resultSubject.next(result);
-			}
-		})
-		.catch((err) => {
-			result.success = false;
-			result.code = err.code;
-			result.message = err.message;
-
-			resultSubject.next(result);
-		});
-
-	return resultSubject.asObservable();
-};
-
-const awsAPIWithoutBody = <T = any>(
-	method: "del" | "head",
-	path: string,
-	options: RestApiOptionsBase,
-): Observable<AWSApiResult<T>> => {
-	const result: AWSApiResult<T> = {
-		success: false,
-	};
-
-	const resultSubject = new Subject<AWSApiResult<T>>();
-
-	if (path[0] !== "/") path = "/" + path;
-
-	API[method]({ apiName: API_NAME, path, options })
-		.response.then((response) => {
-			if (response) {
-				result.success = response.statusCode === 200;
-				result.code = response.statusCode.toString();
-
-				resultSubject.next(result);
-			}
-		})
-		.catch((err) => {
-			result.success = false;
-			result.code = err.code;
-			result.message = err.message;
-
-			resultSubject.next(result);
-		});
-
-	return resultSubject.asObservable();
-};
+): Observable<AWSApiResult<T>> =>
+	awsRequest<T>(
+		() =>
+			API.patch({
+				apiName: API_NAME,
+				path,
+				options: { body, queryParams },
+			}),
+		mapJsonBody,
+	);
